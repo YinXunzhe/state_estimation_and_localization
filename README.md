@@ -1,5 +1,6 @@
-# state_estimation_and_localization
-Coursera 课程 State Estimation and Localization for Self-Driving Cars 结课项目
+# State Estimation and Localization for Self-Driving Cars 结课项目
+Coursera 课程证书  
+https://coursera.org/share/659b0b3c3ba011cc70e6e80758b3b578
 ----
 ## Project Overview  
 In this assignment, you will implement the Error-State Extended Kalman Filter (ES-EKF) to localize a vehicle using data from the CARLA simulator. The project has three parts, which should be completed in sequence:
