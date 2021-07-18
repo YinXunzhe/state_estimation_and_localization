@@ -71,18 +71,18 @@ lidar = data['lidar']
 # THIS IS THE CODE YOU WILL MODIFY FOR PART 2 OF THE ASSIGNMENT.
 ################################################################################################
 # Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
-C_li = np.array([
-    [0.99376, -0.09722, 0.05466],
-    [0.09971, 0.99401, -0.04475],
-    [-0.04998, 0.04992, 0.9975]
-])
+# C_li = np.array([
+#     [0.99376, -0.09722, 0.05466],
+#     [0.09971, 0.99401, -0.04475],
+#     [-0.04998, 0.04992, 0.9975]
+# ])
 
 # Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
-# C_li = np.array([
-#      [ 0.9975 , -0.04742,  0.05235],
-#      [ 0.04992,  0.99763, -0.04742],
-#      [-0.04998,  0.04992,  0.9975 ]
-# ])
+C_li = np.array([
+     [ 0.9975 , -0.04742,  0.05235],
+     [ 0.04992,  0.99763, -0.04742],
+     [-0.04998,  0.04992,  0.9975 ]
+])
 
 t_i_li = np.array([0.5, 0.1, 0.5])
 
@@ -99,8 +99,10 @@ lidar.data = (C_li @ lidar.data.T).T + t_i_li
 var_imu_f = 0.10
 var_imu_w = 0.25
 var_gnss = 0.01
-var_lidar = 1.00
-
+# var_lidar = 1.00
+# 针对Part2的更改：增加lidar噪声方差以弥补lidar和imu坐标转换不正确导致的偏差
+# var_lidar = 10
+var_lidar = 100
 ################################################################################################
 # We can also set up some constants that won't change for any iteration of our solver.
 ################################################################################################
@@ -206,12 +208,12 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
 
     # 3. Check availability of GNSS and LIDAR measurements
     if imu_f.t[k - 1] >= lidar.t[lidar_i] and lidar_i < len(lidar.t) - 1:
-        print("lidar_k", k)
+        # print("lidar_k", k)
         p_est[k], v_est[k], q_est[k], p_cov[k] = \
             measurement_update(r_cov_lidar, p_cov_check, lidar.data[lidar_i], p_check, v_check, q_check)
         lidar_i += 1
         if imu_f.t[k - 1] >= gnss.t[gnss_i] and gnss_i < len(gnss.t) - 1:
-            print("gnss_k", k)
+            # print("gnss_k", k)
             p_est[k], v_est[k], q_est[k], p_cov[k] = \
                 measurement_update(r_cov_gnss, p_cov_check, gnss.data[gnss_i], p_check, v_check, q_check)
             gnss_i += 1
@@ -301,22 +303,22 @@ plt.show()
 ################################################################################################
 
 # Pt. 1 submission
-p1_indices = [9000, 9400, 9800, 10200, 10600]
-p1_str = ''
-for val in p1_indices:
-    for i in range(3):
-        p1_str += '%.3f ' % (p_est[val, i])
-with open('pt1_submission.txt', 'w') as file:
-    file.write(p1_str)
+# p1_indices = [9000, 9400, 9800, 10200, 10600]
+# p1_str = ''
+# for val in p1_indices:
+#     for i in range(3):
+#         p1_str += '%.3f ' % (p_est[val, i])
+# with open('pt1_submission.txt', 'w') as file:
+#     file.write(p1_str)
 
 # Pt. 2 submission
-# p2_indices = [9000, 9400, 9800, 10200, 10600]
-# p2_str = ''
-# for val in p2_indices:
-#     for i in range(3):
-#         p2_str += '%.3f ' % (p_est[val, i])
-# with open('pt2_submission.txt', 'w') as file:
-#     file.write(p2_str)
+p2_indices = [9000, 9400, 9800, 10200, 10600]
+p2_str = ''
+for val in p2_indices:
+    for i in range(3):
+        p2_str += '%.3f ' % (p_est[val, i])
+with open('pt2_submission.txt', 'w') as file:
+    file.write(p2_str)
 
 # Pt. 3 submission
 # p3_indices = [6800, 7600, 8400, 9200, 10000]
