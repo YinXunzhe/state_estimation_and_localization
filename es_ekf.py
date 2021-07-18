@@ -51,15 +51,15 @@ lidar = data['lidar']
 # Let's plot the ground truth trajectory to see what it looks like. When you're testing your
 # code later, feel free to comment this out.
 ################################################################################################
-gt_fig = plt.figure()
-ax = gt_fig.add_subplot(111, projection='3d')
-ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2])
-ax.set_xlabel('x [m]')
-ax.set_ylabel('y [m]')
-ax.set_zlabel('z [m]')
-ax.set_title('Ground Truth trajectory')
-ax.set_zlim(-1, 5)
-plt.show()
+# gt_fig = plt.figure()
+# ax = gt_fig.add_subplot(111, projection='3d')
+# ax.plot(gt.p[:, 0], gt.p[:, 1], gt.p[:, 2])
+# ax.set_xlabel('x [m]')
+# ax.set_ylabel('y [m]')
+# ax.set_zlabel('z [m]')
+# ax.set_title('Ground Truth trajectory')
+# ax.set_zlim(-1, 5)
+# plt.show()
 
 ################################################################################################
 # Remember that our LIDAR data is actually just a set of positions estimated from a separate
@@ -72,9 +72,9 @@ plt.show()
 ################################################################################################
 # Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
 C_li = np.array([
-   [ 0.99376, -0.09722,  0.05466],
-   [ 0.09971,  0.99401, -0.04475],
-   [-0.04998,  0.04992,  0.9975 ]
+    [0.99376, -0.09722, 0.05466],
+    [0.09971, 0.99401, -0.04475],
+    [-0.04998, 0.04992, 0.9975]
 ])
 
 # Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
@@ -98,7 +98,7 @@ lidar.data = (C_li @ lidar.data.T).T + t_i_li
 ################################################################################################
 var_imu_f = 0.10
 var_imu_w = 0.25
-var_gnss  = 0.01
+var_gnss = 0.01
 var_lidar = 1.00
 
 ################################################################################################
@@ -120,13 +120,22 @@ v_est = np.zeros([imu_f.data.shape[0], 3])  # velocity estimates
 q_est = np.zeros([imu_f.data.shape[0], 4])  # orientation estimates as quaternions
 p_cov = np.zeros([imu_f.data.shape[0], 9, 9])  # covariance matrices at each timestep
 
+# 以下为自己增加的变量定义
+q_cov = np.zeros([6, 6])  # 运动方程 噪声的协方差矩阵Q
+
+r_cov_lidar = np.eye(3) * var_lidar  # 雷达测量噪声协方差
+r_cov_gnss = np.eye(3) * var_gnss  # GNSS测量噪声协方差
+
+C_ns = np.zeros([3, 3])  # IMU->navigation 的坐标转换矩阵
+
 # Set initial values.
 p_est[0] = gt.p[0]
 v_est[0] = gt.v[0]
 q_est[0] = Quaternion(euler=gt.r[0]).to_numpy()
 p_cov[0] = np.zeros(9)  # covariance of estimate
-gnss_i  = 0
+gnss_i = 0
 lidar_i = 0
+
 
 #### 4. Measurement Update #####################################################################
 
@@ -136,14 +145,25 @@ lidar_i = 0
 ################################################################################################
 def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
     # 3.1 Compute Kalman Gain
+    K_g = p_cov_check @ h_jac.T @ np.linalg.inv(h_jac @ p_cov_check @ h_jac.T + sensor_var)
 
     # 3.2 Compute error state
+    delta_x = K_g @ (y_k - p_check)
+
+    delta_p = delta_x[:3]
+    delta_v = delta_x[3:6]
+    delta_phi = delta_x[-3:]
 
     # 3.3 Correct predicted state
+    p_hat = p_check + delta_p
+    v_hat = v_check + delta_v
+    q_hat = q_check.quat_mult_right(Quaternion(euler=delta_phi))
 
     # 3.4 Compute corrected covariance
+    p_cov_hat = (np.eye(9) - K_g @ h_jac) @ p_cov_check
 
     return p_hat, v_hat, q_hat, p_cov_hat
+
 
 #### 5. Main Filter Loop #######################################################################
 
@@ -153,14 +173,53 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
 ################################################################################################
 for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial prediction from gt
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
-
     # 1. Update state with IMU inputs
+
+    # 四元数q_est的实部和虚部
+    w=q_est[k-1][0]
+    x=q_est[k-1][1]
+    y=q_est[k-1][2]
+    z=q_est[k-1][3]
+
+    # IMU坐标系到导航系的转换矩阵C_ns
+    C_ns = Quaternion(w,x,y,z).to_mat()
+
+    # 根据运动方程进行状态更新
+    p_check = p_est[k - 1] + delta_t * v_est[k - 1] + 0.5 * delta_t ** 2 * (C_ns @ imu_f.data[k - 1] + g)
+    v_check = v_est[k - 1] + delta_t * (C_ns @ imu_f.data[k - 1] + g)
+    q_w = Quaternion(euler=imu_w.data[k - 1] * delta_t)  # delta_t内变化的角度,以四元数q_w表示
+    q_check = Quaternion(w,x,y,z).quat_mult_left(q_w,'Quaternion')
 
     # 1.1 Linearize the motion model and compute Jacobians
 
+    # 计算雅可比矩阵F
+    f_jac = np.eye(9)
+    f_jac[:3, 3:6] = delta_t * np.eye(3)
+    f_jac[3:6, 6:] = -skew_symmetric(C_ns @ imu_f.data[k - 1]) * delta_t
+
+    # 计算运动噪声协方差
+    q_cov[:3, :3] = np.eye(3) * var_imu_f * (delta_t ** 2)
+    q_cov[3:, 3:] = np.eye(3) * var_imu_w * (delta_t ** 2)
+
     # 2. Propagate uncertainty
+    p_cov_check = f_jac @ p_cov[k - 1] @ f_jac.T + l_jac @ q_cov @ l_jac.T
 
     # 3. Check availability of GNSS and LIDAR measurements
+    if imu_f.t[k - 1] >= lidar.t[lidar_i] and lidar_i < len(lidar.t) - 1:
+        print("lidar_k", k)
+        p_est[k], v_est[k], q_est[k], p_cov[k] = \
+            measurement_update(r_cov_lidar, p_cov_check, lidar.data[lidar_i], p_check, v_check, q_check)
+        lidar_i += 1
+        if imu_f.t[k - 1] >= gnss.t[gnss_i] and gnss_i < len(gnss.t) - 1:
+            print("gnss_k", k)
+            p_est[k], v_est[k], q_est[k], p_cov[k] = \
+                measurement_update(r_cov_gnss, p_cov_check, gnss.data[gnss_i], p_check, v_check, q_check)
+            gnss_i += 1
+    else:
+        p_est[k] = p_check
+        v_est[k] = v_check
+        q_est[k] = q_check.to_numpy()
+        p_cov[k] = p_cov_check
 
     # Update states (save)
 
@@ -174,8 +233,8 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
 ################################################################################################
 est_traj_fig = plt.figure()
 ax = est_traj_fig.add_subplot(111, projection='3d')
-ax.plot(p_est[:,0], p_est[:,1], p_est[:,2], label='Estimated')
-ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2], label='Ground Truth')
+ax.plot(p_est[:, 0], p_est[:, 1], p_est[:, 2], label='Estimated')
+ax.plot(gt.p[:, 0], gt.p[:, 1], gt.p[:, 2], label='Ground Truth')
 ax.set_xlabel('Easting [m]')
 ax.set_ylabel('Northing [m]')
 ax.set_zlabel('Up [m]')
@@ -186,7 +245,7 @@ ax.set_zlim(-2, 2)
 ax.set_xticks([0, 50, 100, 150, 200])
 ax.set_yticks([0, 50, 100, 150, 200])
 ax.set_zticks([-2, -1, 0, 1, 2])
-ax.legend(loc=(0.62,0.77))
+ax.legend(loc=(0.62, 0.77))
 ax.view_init(elev=45, azim=-50)
 plt.show()
 
@@ -219,18 +278,18 @@ p_cov_std = np.sqrt(np.diagonal(p_cov[:, :6, :6], axis1=1, axis2=2))
 titles = ['Easting', 'Northing', 'Up', 'Roll', 'Pitch', 'Yaw']
 for i in range(3):
     ax[0, i].plot(range(num_gt), gt.p[:, i] - p_est[:num_gt, i])
-    ax[0, i].plot(range(num_gt),  3 * p_cov_std[:num_gt, i], 'r--')
+    ax[0, i].plot(range(num_gt), 3 * p_cov_std[:num_gt, i], 'r--')
     ax[0, i].plot(range(num_gt), -3 * p_cov_std[:num_gt, i], 'r--')
     ax[0, i].set_title(titles[i])
-ax[0,0].set_ylabel('Meters')
+ax[0, 0].set_ylabel('Meters')
 
 for i in range(3):
     ax[1, i].plot(range(num_gt), \
-        angle_normalize(gt.r[:, i] - p_est_euler[:num_gt, i]))
-    ax[1, i].plot(range(num_gt),  3 * p_cov_euler_std[:num_gt, i], 'r--')
+                  angle_normalize(gt.r[:, i] - p_est_euler[:num_gt, i]))
+    ax[1, i].plot(range(num_gt), 3 * p_cov_euler_std[:num_gt, i], 'r--')
     ax[1, i].plot(range(num_gt), -3 * p_cov_euler_std[:num_gt, i], 'r--')
-    ax[1, i].set_title(titles[i+3])
-ax[1,0].set_ylabel('Radians')
+    ax[1, i].set_title(titles[i + 3])
+ax[1, 0].set_ylabel('Radians')
 plt.show()
 
 #### 7. Submission #############################################################################
