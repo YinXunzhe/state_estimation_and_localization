@@ -14,8 +14,13 @@ from rotations import angle_normalize, rpy_jacobian_axis_angle, skew_symmetric, 
 # This is where you will load the data from the pickle files. For parts 1 and 2, you will use
 # p1_data.pkl. For Part 3, you will use pt3_data.pkl.
 ################################################################################################
+# For parts 1 and 2, you will use p1_data.pkl.
 with open('data/pt1_data.pkl', 'rb') as file:
     data = pickle.load(file)
+
+# For Part 3, you will use pt3_data.pkl.
+# with open('data/pt3_data.pkl', 'rb') as file:
+#     data = pickle.load(file)
 
 ################################################################################################
 # Each element of the data dictionary is stored as an item from the data dictionary, which we
@@ -71,18 +76,18 @@ lidar = data['lidar']
 # THIS IS THE CODE YOU WILL MODIFY FOR PART 2 OF THE ASSIGNMENT.
 ################################################################################################
 # Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
-# C_li = np.array([
-#     [0.99376, -0.09722, 0.05466],
-#     [0.09971, 0.99401, -0.04475],
-#     [-0.04998, 0.04992, 0.9975]
-# ])
-
-# Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
 C_li = np.array([
-     [ 0.9975 , -0.04742,  0.05235],
-     [ 0.04992,  0.99763, -0.04742],
-     [-0.04998,  0.04992,  0.9975 ]
+    [0.99376, -0.09722, 0.05466],
+    [0.09971, 0.99401, -0.04475],
+    [-0.04998, 0.04992, 0.9975]
 ])
+
+# # Incorrect calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.05).
+# C_li = np.array([
+#      [ 0.9975 , -0.04742,  0.05235],
+#      [ 0.04992,  0.99763, -0.04742],
+#      [-0.04998,  0.04992,  0.9975 ]
+# ])
 
 t_i_li = np.array([0.5, 0.1, 0.5])
 
@@ -99,10 +104,11 @@ lidar.data = (C_li @ lidar.data.T).T + t_i_li
 var_imu_f = 0.10
 var_imu_w = 0.25
 var_gnss = 0.01
-# var_lidar = 1.00
+var_lidar = 1.00
+
 # 针对Part2的更改：增加lidar噪声方差以弥补lidar和imu坐标转换不正确导致的偏差
-# var_lidar = 10
-var_lidar = 100
+# # var_lidar = 10
+# var_lidar = 100
 ################################################################################################
 # We can also set up some constants that won't change for any iteration of our solver.
 ################################################################################################
@@ -123,7 +129,6 @@ q_est = np.zeros([imu_f.data.shape[0], 4])  # orientation estimates as quaternio
 p_cov = np.zeros([imu_f.data.shape[0], 9, 9])  # covariance matrices at each timestep
 
 # 以下为自己增加的变量定义
-q_cov = np.zeros([6, 6])  # 运动方程 噪声的协方差矩阵Q
 
 r_cov_lidar = np.eye(3) * var_lidar  # 雷达测量噪声协方差
 r_cov_gnss = np.eye(3) * var_gnss  # GNSS测量噪声协方差
@@ -159,7 +164,7 @@ def measurement_update(sensor_var, p_cov_check, y_k, p_check, v_check, q_check):
     # 3.3 Correct predicted state
     p_hat = p_check + delta_p
     v_hat = v_check + delta_v
-    q_hat = q_check.quat_mult_right(Quaternion(euler=delta_phi))
+    q_hat = q_check.quat_mult_right(Quaternion(euler=delta_phi),out='Quaternion')
 
     # 3.4 Compute corrected covariance
     p_cov_hat = (np.eye(9) - K_g @ h_jac) @ p_cov_check
@@ -177,29 +182,25 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     delta_t = imu_f.t[k] - imu_f.t[k - 1]
     # 1. Update state with IMU inputs
 
-    # 四元数q_est的实部和虚部
-    w=q_est[k-1][0]
-    x=q_est[k-1][1]
-    y=q_est[k-1][2]
-    z=q_est[k-1][3]
-
     # IMU坐标系到导航系的转换矩阵C_ns
-    C_ns = Quaternion(w,x,y,z).to_mat()
+    C_ns = Quaternion(*q_est[k-1]).to_mat()
 
     # 根据运动方程进行状态更新
-    p_check = p_est[k - 1] + delta_t * v_est[k - 1] + 0.5 * delta_t ** 2 * (C_ns @ imu_f.data[k - 1] + g)
-    v_check = v_est[k - 1] + delta_t * (C_ns @ imu_f.data[k - 1] + g)
+    c_ns_dot_f_km = np.dot(C_ns,imu_f.data[k - 1])
+    p_check = p_est[k - 1] + delta_t * v_est[k - 1] + 0.5 * delta_t ** 2 * (c_ns_dot_f_km + g)
+    v_check = v_est[k - 1] + delta_t * (c_ns_dot_f_km + g)
     q_w = Quaternion(euler=imu_w.data[k - 1] * delta_t)  # delta_t内变化的角度,以四元数q_w表示
-    q_check = Quaternion(w,x,y,z).quat_mult_left(q_w,'Quaternion')
+    q_check = q_w.quat_mult_right(q_est[k-1],out='Quaternion')
 
     # 1.1 Linearize the motion model and compute Jacobians
 
     # 计算雅可比矩阵F
     f_jac = np.eye(9)
     f_jac[:3, 3:6] = delta_t * np.eye(3)
-    f_jac[3:6, 6:] = -skew_symmetric(C_ns @ imu_f.data[k - 1]) * delta_t
+    f_jac[3:6, 6:] = -skew_symmetric(c_ns_dot_f_km) * delta_t
 
     # 计算运动噪声协方差
+    q_cov = np.zeros([6, 6])  # 运动方程 噪声的协方差矩阵Q
     q_cov[:3, :3] = np.eye(3) * var_imu_f * (delta_t ** 2)
     q_cov[3:, 3:] = np.eye(3) * var_imu_w * (delta_t ** 2)
 
@@ -207,23 +208,23 @@ for k in range(1, imu_f.data.shape[0]):  # start at 1 b/c we have initial predic
     p_cov_check = f_jac @ p_cov[k - 1] @ f_jac.T + l_jac @ q_cov @ l_jac.T
 
     # 3. Check availability of GNSS and LIDAR measurements
-    if imu_f.t[k - 1] >= lidar.t[lidar_i] and lidar_i < len(lidar.t) - 1:
+    if gnss_i < gnss.data.shape[0] and imu_f.t[k] >= gnss.t[gnss_i]:
+        # print("gnss_k", k)
+        p_check, v_check, q_check, p_cov_check = \
+            measurement_update(r_cov_gnss, p_cov_check, gnss.data[gnss_i], p_check, v_check, q_check)
+        gnss_i += 1
+    if lidar_i < lidar.data.shape[0] and imu_f.t[k] >= lidar.t[lidar_i]:
         # print("lidar_k", k)
-        p_est[k], v_est[k], q_est[k], p_cov[k] = \
+        p_check, v_check, q_check, p_cov_check = \
             measurement_update(r_cov_lidar, p_cov_check, lidar.data[lidar_i], p_check, v_check, q_check)
         lidar_i += 1
-        if imu_f.t[k - 1] >= gnss.t[gnss_i] and gnss_i < len(gnss.t) - 1:
-            # print("gnss_k", k)
-            p_est[k], v_est[k], q_est[k], p_cov[k] = \
-                measurement_update(r_cov_gnss, p_cov_check, gnss.data[gnss_i], p_check, v_check, q_check)
-            gnss_i += 1
-    else:
-        p_est[k] = p_check
-        v_est[k] = v_check
-        q_est[k] = q_check.to_numpy()
-        p_cov[k] = p_cov_check
+
 
     # Update states (save)
+    p_est[k] = p_check
+    v_est[k] = v_check
+    q_est[k] = q_check.to_numpy()
+    p_cov[k] = p_cov_check
 
 #### 6. Results and Analysis ###################################################################
 
@@ -303,22 +304,22 @@ plt.show()
 ################################################################################################
 
 # Pt. 1 submission
-# p1_indices = [9000, 9400, 9800, 10200, 10600]
-# p1_str = ''
-# for val in p1_indices:
-#     for i in range(3):
-#         p1_str += '%.3f ' % (p_est[val, i])
-# with open('pt1_submission.txt', 'w') as file:
-#     file.write(p1_str)
+p1_indices = [9000, 9400, 9800, 10200, 10600]
+p1_str = ''
+for val in p1_indices:
+    for i in range(3):
+        p1_str += '%.3f ' % (p_est[val, i])
+with open('pt1_submission.txt', 'w') as file:
+    file.write(p1_str)
 
 # Pt. 2 submission
-p2_indices = [9000, 9400, 9800, 10200, 10600]
-p2_str = ''
-for val in p2_indices:
-    for i in range(3):
-        p2_str += '%.3f ' % (p_est[val, i])
-with open('pt2_submission.txt', 'w') as file:
-    file.write(p2_str)
+# p2_indices = [9000, 9400, 9800, 10200, 10600]
+# p2_str = ''
+# for val in p2_indices:
+#     for i in range(3):
+#         p2_str += '%.3f ' % (p_est[val, i])
+# with open('pt2_submission.txt', 'w') as file:
+#     file.write(p2_str)
 
 # Pt. 3 submission
 # p3_indices = [6800, 7600, 8400, 9200, 10000]
